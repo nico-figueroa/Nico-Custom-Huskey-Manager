@@ -179,7 +179,7 @@ $queryVaultOwner = "SELECT *
                     WHERE vault_permissions.vault_id = $vaultId
                     AND vault_permissions.role_id = 1
                     AND vault_permissions.user_id = users.user_id
-                    AND users.username = '" . $_COOKIE['authenticated'] . "'";
+                    AND users.username = '" . $_SESSION['authenticated'] . "'";
 
 $resultIsOwner = $conn->query($queryVaultOwner);
 

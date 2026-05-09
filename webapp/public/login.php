@@ -57,14 +57,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$blocked) {
         $userFromDB = $result->fetch_assoc();
 
         //$_COOKIE['authenticated'] = $username;
-        setcookie('authenticated', $username, time() + 3600, '/');     
+        $_SESSION['authenticated'] = $username;
+        // setcookie('authenticated', $username, time() + 3600, '/');     
 
         if ($userFromDB['default_role_id'] == 1)
         {        
-            setcookie('isSiteAdministrator', true, time() + 3600, '/');                
+            $_SESSION['isSiteAdministrator'] = 1;
+            // setcookie('isSiteAdministrator', true, time() + 3600, '/');                
         }else{
-            unset($_COOKIE['isSiteAdministrator']); 
-            setcookie('isSiteAdministrator', '', -1, '/'); 
+            unset($_SESSION['isSiteAdministrator']);
+            // setcookie('isSiteAdministrator', '', -1, '/'); 
         }
         header("Location: index.php");
         exit();

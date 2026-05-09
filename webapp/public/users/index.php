@@ -35,7 +35,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $password = $conn->real_escape_string($_POST['password']);
                     
 
-                    $query = "INSERT INTO users (username, first_name, last_name, email, password, default_role_id) VALUES ('$username', '$first_name', '$last_name', '$email', '$password', 3, 1)";
+                    $query = "INSERT INTO users (username, first_name, last_name, email, password, default_role_id, approved) VALUES ('$username', '$first_name', '$last_name', '$email', '$password', 3, 1)";
                     $result = $conn->query($query);
 
                     if (!$result) {
