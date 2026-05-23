@@ -25,11 +25,12 @@ if ($conn->connect_error) {
 
 unset($error_message);
 
-if ($conn->connect_error) {
-    $errorMessage = "Connection failed: " . $conn->connect_error;    
-    die($errorMessage);
-}
+//if ($conn->connect_error) {
+//    $errorMessage = "Connection failed: " . $conn->connect_error;    
+//    die($errorMessage);
+//}
 
+// Check for brute force attacks 
 $ip = $_SERVER['REMOTE_ADDR'];
 $sql_check = "SELECT COUNT(*) as attempts FROM failed_logins WHERE ip_address = '$ip' AND attempt_time > DATE_SUB(NOW(), INTERVAL 15 MINUTE)";
 $result_check = $conn->query($sql_check);
@@ -44,27 +45,34 @@ if ($result_check) {
 }
 
 // Check if the form is submitted
+$blocked = false; // Temporary disable for brute force check
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$blocked) {
     
     $username = $_POST['username'];
     $password = $_POST['password'];
 
-    $sql = "SELECT * FROM users WHERE username = '$username' AND password = '$password' AND approved = 1";
-    $result = $conn->query($sql);
+//    $sql = "SELECT * FROM users WHERE username = '$username' AND password = '$password' AND approved = 1";
+//    $result = $conn->query($sql);
+
+    $stmt = $conn->prepare("SELECT * FROM users WHERE username = ? AND approved = 1");
+    $stmt->bind_param("s", $username);
+    $stmt->execute();
+    $result = $stmt->get_result();
 
     if($result->num_rows > 0) {
        
         $userFromDB = $result->fetch_assoc();
 
+        if (password_verify($password, $userFromDB['password'])) {
+
         //$_COOKIE['authenticated'] = $username;
         $_SESSION['authenticated'] = $username;
         // setcookie('authenticated', $username, time() + 3600, '/');     
 
-        if ($userFromDB['default_role_id'] == 1)
-        {        
+        if ($userFromDB['default_role_id'] == 1){        
             $_SESSION['isSiteAdministrator'] = 1;
             // setcookie('isSiteAdministrator', true, time() + 3600, '/');                
-        }else{
+        } else{
             unset($_SESSION['isSiteAdministrator']);
             // setcookie('isSiteAdministrator', '', -1, '/'); 
         }
@@ -85,6 +93,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$blocked) {
         }
     }
 
+    } else {
+        $error_message = 'Invalid username or password.';
+    }
 }
 
 $conn->close();

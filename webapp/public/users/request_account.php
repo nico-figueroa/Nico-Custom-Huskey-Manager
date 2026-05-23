@@ -10,6 +10,7 @@ $conn = new mysqli($servername, $username, $password, $dbname);
 unset($error_message);
 
 if ($conn->connect_error) {
+    $logger->alert("Database connection failed");
     die("Connection failed: " . $conn->connect_error);
 }
 
@@ -20,12 +21,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $firstName = $_POST['first_name'];
     $lastName = $_POST['last_name'];
     $email = $_POST['email'];
+    $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
     
 
-    $sql = "INSERT INTO users (username, first_name, last_name, email, password, default_role_id, approved) 
-            VALUES ('$username', '$firstName', '$lastName', '$email', '$password', 3, 0)";
+//    $sql = "INSERT INTO users (username, first_name, last_name, email, password, default_role_id, approved) 
+//            VALUES ('$username', '$firstName', '$lastName', '$email', '$password', 3, 0)";
 
-    if ($conn->query($sql) === TRUE) {
+    $stmt = $conn->prepare("INSERT INTO users (username, first_name, last_name, email, password, default_role_id, approved) VALUES (?, ?, ?, ?, ?, 3, 0)");
+    $stmt->bind_param("sssss", $username, $firstName, $lastName, $email, $password);
+    $stmt->execute();
+
+    if ($stmt->affected_rows > 0) {
         header("Location: /login.php");
         exit();
     } else {
