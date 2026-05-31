@@ -18,14 +18,35 @@ if ($conn->connect_error) {
 
 $uploadDir = './uploads/'; // Specify the directory where you want to save the uploaded files
 
+include '../components/authenticate.php';
+include '../components/authorization.php';
+
+$vaultId = isset($_GET['vault_id']) ? intval($_GET['vault_id']) : (isset($_POST['vaultId']) ? intval($_POST['vaultId']) : 0);
+if ($vaultId <= 0) {
+    die('Invalid vault selected.');
+}
+
+if (!hasPermission('READ', $vaultId)) {
+    die('Unauthorized access to this vault.');
+}
+
+$userVaultRole = getUserVaultRole($vaultId);
+$isVaultOwner = canManageVaultPermissions($vaultId);
+$canWrite = canWriteVault($vaultId);
+$canDelete = canDeleteVault($vaultId);
+$canManagePermissions = canManageVaultPermissions($vaultId);
+
 
 // Add Password
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['addUsername']) && isset ($_POST['addWebsite']) && isset ($_POST['addPassword']) && isset ($_POST['vaultId'])) {
+    $vaultId = intval($_POST['vaultId']);
+    if (!hasPermission('WRITE', $vaultId)) {
+        die('Unauthorized action on this vault.');
+    }
     $addUsername = $_POST['addUsername'];
     $addWebsite = $_POST['addWebsite'];
     $addPassword = $_POST['addPassword'];
     $addNotes = $_POST['addNotes'];
-    $vaultId = $_POST['vaultId'];
 
     // Check if a file is uploaded
     if (!empty ($_FILES['file']['name'])) {
@@ -59,12 +80,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['addUsername']) && is
 
 // Edit Password
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['editPasswordId']) && isset ($_POST['editUsername']) && isset ($_POST['editPassword']) && isset ($_POST['editWebsite']) && isset ($_POST['vaultId'])) {
+    $vaultId = intval($_POST['vaultId']);
+    if (!hasPermission('WRITE', $vaultId)) {
+        die('Unauthorized action on this vault.');
+    }
     $editUsername = $_POST['editUsername'];
     $editWebsite = $_POST['editWebsite'];
     $editPassword = $_POST['editPassword'];
     $editNotes = $_POST['editNotes'];
     $editPasswordId = $_POST['editPasswordId'];
-    $vaultId = $_POST['vaultId'];
 
     // Check if a new file is uploaded
     if (!empty ($_FILES['editFile']['name'])) {
@@ -122,7 +146,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['editPasswordId']) &&
 // Delete Password
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['deletePasswordId']) && isset ($_POST['vaultId'])) {
     $deletePasswordId = $_POST['deletePasswordId'];
-    $vaultId = $_POST['vaultId'];
+    $vaultId = intval($_POST['vaultId']);
+    if (!hasPermission('DELETE', $vaultId)) {
+        die('Unauthorized action on this vault.');
+    }
 
     $queryDeletePassword = "DELETE FROM vault_passwords WHERE password_id = $deletePasswordId";
     $resultDeletePassword = $conn->query($queryDeletePassword);
@@ -158,12 +185,14 @@ $vaultName = $row['vault_name'];
 $queryPasswords = "SELECT * FROM vault_passwords WHERE vault_id = $vaultId";
 
 $searchQuery = "";
-//Handle a Search request
-if (isset ($_GET['searchQuery']) && !empty ($_GET['searchQuery'])) {
-    $searchQuery = $_GET['searchQuery'];    
-    $queryPasswords = "SELECT * FROM vault_passwords            
+$searchTerm = "";
+// Handle a Search request
+if (isset ($_GET['searchQuery']) && trim($_GET['searchQuery']) !== '') {
+    $searchQuery = trim($_GET['searchQuery']);
+    $searchTerm = $conn->real_escape_string($searchQuery);
+    $queryPasswords = "SELECT * FROM vault_passwords
             WHERE vault_id = $vaultId
-            AND (vault_passwords.username LIKE '%$searchQuery%' OR vault_passwords.website LIKE '%$searchQuery%')";
+            AND (vault_passwords.username LIKE '%$searchTerm%' OR vault_passwords.website LIKE '%$searchTerm%')";
 }
 
 // Retrieve passwords for the vault
@@ -174,27 +203,13 @@ if (!$resultPasswords) {
     die ("Query failed: " . $conn->error);
 }
 
-$queryVaultOwner = "SELECT *
-                    FROM vault_permissions, users
-                    WHERE vault_permissions.vault_id = $vaultId
-                    AND vault_permissions.role_id = 1
-                    AND vault_permissions.user_id = users.user_id
-                    AND users.username = '" . $_SESSION['authenticated'] . "'";
-
-$resultIsOwner = $conn->query($queryVaultOwner);
-
-$isVaultOwner = 0;
-
-if ($resultIsOwner->num_rows > 0) {
-    $isVaultOwner = true;
-}
-
-
-
 // Handle file deletion
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['deleteFilePasswordId']) && isset ($_POST['deleteFileSubmit'])) {
     $deleteFilePasswordId = $_POST['deleteFilePasswordId'];
-    $vaultId = $_POST['deleteFileVaultId'];
+    $vaultId = intval($_POST['deleteFileVaultId']);
+    if (!hasPermission('WRITE', $vaultId)) {
+        die('Unauthorized action on this vault.');
+    }
 
     // Retrieve the file path from the database using the password id
     $queryGetFilePath = "SELECT file_path FROM vault_passwords WHERE password_id = $deleteFilePasswordId";
@@ -253,12 +268,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['deleteFilePasswordId
         <h2>
             <?php echo $vaultName; ?> Vault Passwords
         </h2>
-        <button type="button" class="btn btn-primary mb-2" data-toggle="modal" data-target="#addPasswordModal">
-            Add Password
-        </button>
-        <?php if ($isVaultOwner): ?>
+        <?php if ($canWrite): ?>
+            <button type="button" class="btn btn-primary mb-2" data-toggle="modal" data-target="#addPasswordModal">
+                Add Password
+            </button>
+        <?php endif; ?>
+        <?php if ($canManagePermissions): ?>
             <a href="./vault_permissions.php?vault_id=<?php echo $vaultId ?>" class="btn btn-warning mb-2"> Edit Vault
-                Permissons </a>
+                Permissions </a>
         <?php endif; ?>
 
         <input type="text" id="searchInput" onkeyup="searchTable(event)" placeholder="Search for passwords..."
@@ -296,27 +313,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['deleteFilePasswordId
                         </td>
                         <td>
                             <button class="btn btn-primary btn-sm show-password-btn" data-entry-id="<?= $entry['id'] ?>">Show Password</button>
-                            <button class="btn btn-warning btn-sm edit-password-btn" data-toggle="modal"
-                                data-target="#editPasswordModal" data-password-notes="<?php echo $rowPassword['notes']; ?>"
-                                data-password-password="<?php echo $rowPassword['password']; ?>"
-                                data-password-website="<?php echo $rowPassword['website']; ?>"
-                                data-password-username="<?php echo $rowPassword['username']; ?>"
-                                data-password-id="<?php echo $rowPassword['password_id']; ?>">Edit</button>
-                            <button class="btn btn-danger btn-sm delete-password-btn" data-toggle="modal"
-                                data-target="#deletePasswordModal"
-                                data-password-id="<?php echo $rowPassword['password_id']; ?>">Delete</button>
+                            <?php if ($canWrite): ?>
+                                <button class="btn btn-warning btn-sm edit-password-btn" data-toggle="modal"
+                                    data-target="#editPasswordModal" data-password-notes="<?php echo $rowPassword['notes']; ?>"
+                                    data-password-password="<?php echo $rowPassword['password']; ?>"
+                                    data-password-website="<?php echo $rowPassword['website']; ?>"
+                                    data-password-username="<?php echo $rowPassword['username']; ?>"
+                                    data-password-id="<?php echo $rowPassword['password_id']; ?>">Edit</button>
+                            <?php endif; ?>
+                            <?php if ($canDelete): ?>
+                                <button class="btn btn-danger btn-sm delete-password-btn" data-toggle="modal"
+                                    data-target="#deletePasswordModal"
+                                    data-password-id="<?php echo $rowPassword['password_id']; ?>">Delete</button>
+                            <?php endif; ?>
                         </td>
                         <td>
                             <?php if (!empty ($rowPassword['file_path'])): ?>
                                 <a href="download_file.php?file=<?php echo urlencode($rowPassword['file_path']); ?>&vault_id=<?php echo urlencode($vaultId); ?>"
                                     target="_blank">Download File</a>
-                                <form method="POST" action="<?php echo $_SERVER['PHP_SELF']; ?>">
-                                    <input type="hidden" name="deleteFilePasswordId"
-                                        value="<?php echo $rowPassword['password_id']; ?>">
-                                    <input type="hidden" name="deleteFileVaultId" value="<?php echo $vaultId; ?>">
-                                    <button type="submit" name="deleteFileSubmit" class="btn btn-danger btn-sm">Delete
-                                        File</button>
-                                </form>
+                                <?php if ($canWrite): ?>
+                                    <form method="POST" action="<?php echo $_SERVER['PHP_SELF']; ?>">
+                                        <input type="hidden" name="deleteFilePasswordId"
+                                            value="<?php echo $rowPassword['password_id']; ?>">
+                                        <input type="hidden" name="deleteFileVaultId" value="<?php echo $vaultId; ?>">
+                                        <button type="submit" name="deleteFileSubmit" class="btn btn-danger btn-sm">Delete
+                                            File</button>
+                                    </form>
+                                <?php endif; ?>
                             <?php endif; ?>
                         </td>
                     </tr>

@@ -1,48 +1,134 @@
 <?php
 
-// Check if the user has the necessary permissions for a specific operation on a vault
+function getCurrentUsername() {
+    return $_SESSION['authenticated'] ?? null;
+}
+
+function isSiteAdmin() {
+    return isset($_SESSION['isSiteAdministrator']) && $_SESSION['isSiteAdministrator'] == true;
+}
+
+function getLogger() {
+    return $GLOBALS['logger'] ?? null;
+}
+
+function getDbConnection() {
+    return $GLOBALS['conn'] ?? null;
+}
+
+function getUserVaultRole($vaultId) {
+    $conn = getDbConnection();
+    if (!$conn) {
+        return null;
+    }
+
+    if (isSiteAdmin()) {
+        return 'Owner';
+    }
+
+    $username = getCurrentUsername();
+    if (!$username) {
+        return null;
+    }
+
+    $usernameEscaped = $conn->real_escape_string($username);
+    $query = "SELECT roles.role AS role
+              FROM vault_permissions
+              JOIN users ON vault_permissions.user_id = users.user_id
+              JOIN roles ON vault_permissions.role_id = roles.role_id
+              WHERE vault_permissions.vault_id = $vaultId
+              AND users.username = '$usernameEscaped'";
+
+    $result = $conn->query($query);
+    if ($result && $result->num_rows > 0) {
+        return $result->fetch_assoc()['role'];
+    }
+
+    return null;
+}
+
 function hasPermission($operation, $vaultId) {
-    $logger = $GLOBALS["logger"];
-    $conn = $GLOBALS["conn"];
+    $logger = getLogger();
+    $userVaultRole = getUserVaultRole($vaultId);
+    $op = strtoupper($operation);
 
-    // If the user is a site administrator, then they have permission so return true immediately.
-    if(isset($_SESSION['isSiteAdministrator']) && $_SESSION['isSiteAdministrator'] == true ){
+    if ($userVaultRole === 'Owner') {
         return true;
-    } else {
-        // If the user is not an administrator, check their role and permission
-        // Check if the user has permission for the specified operation and vault
-        $queryUserVaultRole =  "SELECT roles.role
-                                FROM vault_permissions, users, roles
-                                WHERE vault_permissions.vault_id = $vaultId      
-                                AND vault_permissions.role_id = roles.role_id             
-                                AND vault_permissions.user_id = users.user_id
-                                AND users.username = '" . $_SESSION['authenticated'] . "'";
-    
-        $result = $conn->query($queryUserVaultRole);
+    }
 
-        if ($result && $result->num_rows > 0) {
-            $row = $result->fetch_assoc();
-            $userVaultRole = $row['role'];
+    if ($userVaultRole === 'Editor' && $op !== 'DELETE') {
+        return true;
+    }
 
-             // If they are the Vault Owner they get to do what they want
-            if ($userVaultRole == 'Owner') {
-                return true;
-            }
+    if ($userVaultRole === 'Viewer' && $op === 'READ') {
+        return true;
+    }
 
-            // Check if the user has the Editor role (return true for any operation other than delete)
-            if ($userVaultRole == 'Editor' && strtoupper($operation) != 'DELETE') {
-                return true;
-            }
+    if ($logger) {
+        $logger->warning(getCurrentUsername() . " is attempting the unauthorized action of : $operation on Vault ID : $vaultId");
+    }
 
-            // Check if the user has the Viewer role (return true only for READ operation)
-            if ($userVaultRole  == 'Viewer' && strtoupper($operation) == 'READ') {
-                return true;
-            }
-        }
-                
-        $logger->warning($_SESSION['authenticated'] ." is attempting the unauthorized action of : $operation on Vault ID : $vaultId" );
+    return false;
+}
 
-        return false;
+function canReadVault($vaultId) {
+    return hasPermission('READ', $vaultId);
+}
+
+function canWriteVault($vaultId) {
+    return hasPermission('WRITE', $vaultId);
+}
+
+function canDeleteVault($vaultId) {
+    return hasPermission('DELETE', $vaultId);
+}
+
+function canManageVaultPermissions($vaultId) {
+    $userVaultRole = getUserVaultRole($vaultId);
+    return $userVaultRole === 'Owner';
+}
+
+function getAuthorizedVaultsQuery($searchTerm = '') {
+    $conn = getDbConnection();
+    if (!$conn) {
+        return null;
+    }
+
+    $searchTerm = trim($searchTerm);
+    $searchClause = '';
+
+    if ($searchTerm !== '') {
+        $searchEscaped = $conn->real_escape_string($searchTerm);
+        $searchClause = " AND vaults.vault_name LIKE '%$searchEscaped%'";
+    }
+
+    if (isSiteAdmin()) {
+        return "SELECT vaults.vault_id, vaults.vault_name, 'Owner' AS role FROM vaults" . ($searchClause ? " WHERE " . substr($searchClause, 5) : '');
+    }
+
+    $username = getCurrentUsername();
+    if (!$username) {
+        return "SELECT vaults.vault_id, vaults.vault_name, roles.role FROM vaults WHERE 0";
+    }
+
+    $usernameEscaped = $conn->real_escape_string($username);
+    $query = "SELECT vaults.vault_id, vaults.vault_name, roles.role
+              FROM vaults
+              JOIN vault_permissions ON vaults.vault_id = vault_permissions.vault_id
+              JOIN users ON vault_permissions.user_id = users.user_id
+              JOIN roles ON vault_permissions.role_id = roles.role_id
+              WHERE users.username = '$usernameEscaped'";
+
+    if ($searchClause !== '') {
+        $query .= $searchClause;
+    }
+
+    return $query;
+}
+
+function ensureVaultPermission($operation, $vaultId) {
+    if (!hasPermission($operation, $vaultId)) {
+        die('Unauthorized access to this vault.');
     }
 }
 

@@ -1,5 +1,13 @@
 <?php
 
+session_set_cookie_params([
+    'lifetime' => 0,
+    'path' => '/',
+    'domain' => '',
+    'secure' => true,
+    'httponly' => true,
+    'samesite' => 'Lax'
+]);
 session_start();
 
 include './components/loggly-logger.php';
@@ -31,8 +39,14 @@ unset($error_message);
 //}
 
 // Check for brute force attacks 
-$ip = $_SERVER['REMOTE_ADDR'];
-$sql_check = "SELECT COUNT(*) as attempts FROM failed_logins WHERE ip_address = '$ip' AND attempt_time > DATE_SUB(NOW(), INTERVAL 15 MINUTE)";
+// Prefer the forwarded client IP when behind a proxy/load-balancer
+if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+    $ips = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
+    $ip = trim($ips[0]);
+} else {
+    $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+}
+$sql_check = "SELECT COUNT(*) as attempts FROM failed_logins WHERE ip_address = '$ip' AND attempt_time > DATE_SUB(NOW(), INTERVAL 1 MINUTE)";
 $result_check = $conn->query($sql_check);
 $blocked = false;
 if ($result_check) {
@@ -45,7 +59,7 @@ if ($result_check) {
 }
 
 // Check if the form is submitted
-$blocked = false; // Temporary disable for brute force check
+//$blocked = false; // Temporary disable for brute force check
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$blocked) {
     
     $username = $_POST['username'];
@@ -81,8 +95,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$blocked) {
     } else {
         $error_message = 'Invalid username or password.';  
         $logger->warning("Login failed for username: $username");
-        $sql_insert = "INSERT INTO failed_logins (ip_address, username) VALUES ('$ip', '$username')";
-        $conn->query($sql_insert);
+        $stmt_insert = $conn->prepare("INSERT INTO failed_logins (ip_address, username) VALUES (?, ?)");
+        if ($stmt_insert) {
+            $stmt_insert->bind_param("ss", $ip, $username);
+            $stmt_insert->execute();
+            $stmt_insert->close();
+        } else {
+            error_log('Failed to prepare failed_logins insert: ' . $conn->error);
+        }
         // Check if now blocked
         $result_check2 = $conn->query($sql_check);
         if ($result_check2) {
@@ -95,6 +115,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$blocked) {
 
     } else {
         $error_message = 'Invalid username or password.';
+        // Record failed attempt for non-existent usernames as well
+        $stmt_insert2 = $conn->prepare("INSERT INTO failed_logins (ip_address, username) VALUES (?, ?)");
+        $dummyUser = $username ?? '';
+        if ($stmt_insert2) {
+            $stmt_insert2->bind_param("ss", $ip, $dummyUser);
+            $stmt_insert2->execute();
+            $stmt_insert2->close();
+        } else {
+            error_log('Failed to prepare failed_logins insert (user not found): ' . $conn->error);
+        }
     }
 }
 

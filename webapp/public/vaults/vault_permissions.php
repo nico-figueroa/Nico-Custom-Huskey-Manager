@@ -1,5 +1,7 @@
 <?php
 
+include '../components/authenticate.php';
+include '../components/authorization.php';
 
 $hostname = 'backend-mysql-database';
 $username = 'user';
@@ -25,7 +27,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($_POST['action'] === 'addPermission' && isset($_POST['user_id']) && isset($_POST['role_id']) && isset($_POST['vault_id'])) {
             $userId = $_POST['user_id'];
             $roleId = $_POST['role_id'];
-            $vaultId = $_POST['vault_id'];
+            $vaultId = intval($_POST['vault_id']);
+
+            if (!canManageVaultPermissions($vaultId)) {
+                die('Unauthorized action on this vault.');
+            }
 
             // Perform the necessary database operations to manage user-role-vault relationships
             // For example, you can insert, update, or delete records in the vault_permissions table
@@ -47,8 +53,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['action'])) {
         if ($_POST['action'] === 'deletePermission' && isset($_POST['deletePermissionId']) && isset($_POST['vault_id'])) {
             $permissionId = $_POST['deletePermissionId'];
-            $vaultId = $_POST['vault_id'];
-          
+            $vaultId = intval($_POST['vault_id']);
+
+            if (!canManageVaultPermissions($vaultId)) {
+                die('Unauthorized action on this vault.');
+            }
 
             // Perform the necessary database operations to delete the permission
             $queryDelete = "DELETE FROM vault_permissions WHERE permission_id = $permissionId";
@@ -66,9 +75,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // Initialize variables for selected vault and permissions
-$selectedVaultId = isset($_GET['vault_id']) ? $_GET['vault_id'] : null;
+$selectedVaultId = isset($_GET['vault_id']) ? intval($_GET['vault_id']) : null;
 $selectedVaultName = null;
 $permissions = array();
+
+if ($selectedVaultId && !canManageVaultPermissions($selectedVaultId)) {
+    die('Unauthorized access to vault permissions.');
+}
 
 // Fetch selected vault information and associated permissions
 if ($selectedVaultId) {

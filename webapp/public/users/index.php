@@ -25,33 +25,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = $_POST['action'];
 
         switch ($action) {
-            case 'add_user':
+                case 'add_user':
                 // Handle adding a user
                 if (isset($_POST['username']) && isset($_POST['first_name']) && isset($_POST['last_name']) && isset($_POST['email']) && isset($_POST['password'])) {
                     $username = $conn->real_escape_string($_POST['username']);
                     $first_name = $conn->real_escape_string($_POST['first_name']);
                     $last_name = $conn->real_escape_string($_POST['last_name']);
                     $email = $conn->real_escape_string($_POST['email']);
-                    $password = $conn->real_escape_string($_POST['password']);
-                    
+                    $password = $_POST['password'];
 
-                    $query = "INSERT INTO users (username, first_name, last_name, email, password, default_role_id, approved) VALUES ('$username', '$first_name', '$last_name', '$email', '$password', 3, 1)";
-                    $result = $conn->query($query);
+                    // Hash the password before storing
+                    $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
+                    $defaultRoleId = 3;
+                    $approved = 1;
 
-                    if (!$result) {
-                      
-                        die('A fatal error occurred and has been logged.');
-                        // die("Error adding user: " . $conn->error);
+                    $stmt = $conn->prepare("INSERT INTO users (username, first_name, last_name, email, password, default_role_id, approved) VALUES (?, ?, ?, ?, ?, ?, ?)");
+                    if ($stmt) {
+                        $stmt->bind_param("sssssii", $username, $first_name, $last_name, $email, $hashedPassword, $defaultRoleId, $approved);
+                        $result = $stmt->execute();
+                        if (!$result) {
+                            $errorText = $stmt->error;
+                            error_log('Add user execute failed: ' . $errorText);
+                            if ($stmt->errno === 1062) {
+                                die('A fatal error occurred and has been logged. DB error: Username already exists.');
+                            }
+                            die('A fatal error occurred and has been logged. DB error: ' . htmlspecialchars($errorText, ENT_QUOTES, 'UTF-8'));
+                        }
+                        $stmt->close();
+                    } else {
+                        $errorText = $conn->error;
+                        error_log('Add user prepare failed: ' . $errorText);
+                        die('A fatal error occurred and has been logged. DB error: ' . htmlspecialchars($errorText, ENT_QUOTES, 'UTF-8'));
                     }
 
-                      
-                      // Redirect to the current page after handling a POST
-                      header("Location: {$_SERVER['PHP_SELF']}");
-                      exit();
+                    // Redirect to the current page after handling a POST
+                    header("Location: {$_SERVER['PHP_SELF']}");
+                    exit();
                 }
                 break;
 
-            case 'edit_user':
+                case 'edit_user':
                 // Handle editing a user
                 if (isset($_POST['user_id']) && isset($_POST['username']) && isset($_POST['first_name']) && isset($_POST['last_name']) && isset($_POST['email'])) {
                     $user_id = $_POST['user_id'];
@@ -61,21 +74,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $email = $conn->real_escape_string($_POST['email']);
                     
                     //convert the appoved return value to a database value
-                    if (isset($_POST['approved']) && isset($_POST['approved']) == 'on') {
+                    if (isset($_POST['approved']) && $_POST['approved'] == 'on') {
                         $approved = 1;
                     } else {
                         $approved = 0;
                     }
 
-
-                    $query = "UPDATE users SET username='$username', first_name='$first_name', last_name='$last_name', email='$email', approved='$approved' WHERE user_id=$user_id";
-                    $result = $conn->query($query);
-
-                    if (!$result) {
-                        
-                        die("Error editing user: " . $conn->error);
-                        // die('A fatal error occurred and has been logged.');
-                        
+                    // If a new password was provided, hash it and include in the update
+                    if (isset($_POST['password']) && trim($_POST['password']) !== '') {
+                        $newPassword = $_POST['password'];
+                        $hashedNew = password_hash($newPassword, PASSWORD_DEFAULT);
+                        $stmt = $conn->prepare("UPDATE users SET username=?, first_name=?, last_name=?, email=?, password=?, approved=? WHERE user_id=?");
+                        if ($stmt) {
+                            $stmt->bind_param("sssssii", $username, $first_name, $last_name, $email, $hashedNew, $approved, $user_id);
+                            $result = $stmt->execute();
+                            if (!$result) {
+                                error_log('Edit user execute failed (with password): ' . $stmt->error);
+                                die('A fatal error occurred and has been logged.');
+                            }
+                            $stmt->close();
+                        } else {
+                            error_log('Edit user prepare failed (with password): ' . $conn->error);
+                            die('A fatal error occurred and has been logged.');
+                        }
+                    } else {
+                        $stmt = $conn->prepare("UPDATE users SET username=?, first_name=?, last_name=?, email=?, approved=? WHERE user_id=?");
+                        if ($stmt) {
+                            $stmt->bind_param("ssssii", $username, $first_name, $last_name, $email, $approved, $user_id);
+                            $result = $stmt->execute();
+                            if (!$result) {
+                                error_log('Edit user execute failed: ' . $stmt->error);
+                                die('A fatal error occurred and has been logged.');
+                            }
+                            $stmt->close();
+                        } else {
+                            error_log('Edit user prepare failed: ' . $conn->error);
+                            die('A fatal error occurred and has been logged.');
+                        }
                     }
 
                     
@@ -138,6 +173,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $('#editEmail').val(email);
             var approved = $(this).data('approved');
             $('#editApproved').prop('checked', approved == 1);
+            // Clear any password field when opening edit modal
+            $('#editPassword').val('');
         });
 
         $('.delete-btn').click(function () {            
@@ -288,6 +325,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <input class="form-check-input" type="checkbox" role="switch" name="approved" id="editApproved">
                         <label class="form-check-label" for="editApproved">User Approved</label>
                     </div>                   
+                    <div class="form-group">
+                        <label for="editPassword">Password (leave blank to keep current):</label>
+                        <input type="password" class="form-control" id="editPassword" name="password" placeholder="Leave blank to keep current">
+                    </div>
                     <button type="submit" class="btn btn-primary">Save Changes</button>
                 </form>
             </div>

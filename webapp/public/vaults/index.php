@@ -1,6 +1,7 @@
 <?php
 
 include '../components/authenticate.php';
+include '../components/authorization.php';
 
 include '../components/loggly-logger.php';
 
@@ -107,30 +108,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['deleteVaultId']) && 
 }
 
 // Retrieve vaults from the database
-if ($_SESSION['isSiteAdministrator'] == true) {
-    $query = "SELECT vaults.vault_id, vaults.vault_name
-               FROM vaults";
-} else {
-    $query = "SELECT vaults.vault_id, vaults.vault_name
-    FROM vaults, vault_permissions, users
-    WHERE vaults.vault_id = vault_permissions.vault_id
-    AND vault_permissions.user_id = users.user_id
-    AND users.username = '" . $_SESSION['authenticated'] . "'";
+$searchQuery = "";
+$searchTerm = "";
+if (isset($_GET['searchQuery']) && trim($_GET['searchQuery']) !== '') {
+    $searchQuery = trim($_GET['searchQuery']);
+    $searchTerm = $conn->real_escape_string($searchQuery);
 }
 
-$searchQuery = "";
-//Handle a Search request
-if (isset ($_GET['searchQuery']) && !empty ($_GET['searchQuery'])) {
-    $searchQuery = $_GET['searchQuery'];    
-    $query = "SELECT vaults.vault_id, vaults.vault_name
-            FROM vaults
-            WHERE vaults.vault_name LIKE '%$searchQuery%'";
-}
+$query = getAuthorizedVaultsQuery($searchTerm);
 
 $result = $conn->query($query);
 
 if (!$result) {
     die ("Query failed: " . $conn->error);
+}
+// If a search was performed but returned no authorized vaults, check whether
+// any vaults exist that match the search. If they do, the user lacks
+// permissions for the specified vault(s) and we should show an explicit error.
+$searchError = '';
+if ($searchTerm !== '' && $result->num_rows === 0) {
+    $searchEscaped = $conn->real_escape_string($searchTerm);
+    $globalQuery = "SELECT vault_id, vault_name FROM vaults WHERE vault_name LIKE '%$searchEscaped%'";
+    $globalResult = $conn->query($globalQuery);
+    if ($globalResult && $globalResult->num_rows > 0) {
+        $searchError = 'You have not been granted permissions for the specified vault.';
+    } else {
+        $searchError = 'No vaults match your search.';
+    }
 }
 ?>
 
@@ -165,10 +169,14 @@ if (!$result) {
                 <input type="text" id="searchInput" onkeypress="searchTable(event)" placeholder="Search for vaults..."
                     class="form-control mb-3">
                     <?php if (!empty ($searchQuery)) {
-                    // If $searchQuery is not blank, display the label with its value
-                    echo "<label>Search Results for : " . $searchQuery . "</label>"; 
-                } ?>
-                    <table class="table table-bordered" id="vaultTable">
+                            // If $searchQuery is not blank, display the label with its value
+                            echo "<label>Search Results for : " . htmlspecialchars($searchQuery) . "</label>"; 
+                        }
+
+                        if ($searchError !== ''): ?>
+                            <div class="alert alert-danger" role="alert"><?php echo $searchError; ?></div>
+                        <?php else: ?>
+                        <table class="table table-bordered" id="vaultTable">
                     <thead>
                         <tr>
                             <th>Vault Name</th>
@@ -187,20 +195,27 @@ if (!$result) {
                                     <a href="vault_details.php?vault_id=<?php echo $row['vault_id']; ?>"
                                         class="btn btn-primary btn-sm" role="button" aria-disabled="true">View Vault</a>
 
-                                    <!-- Edit button to open a modal for editing a vault -->
-                                    <button class="btn btn-warning btn-sm edit-btn" data-toggle="modal"
-                                        data-target="#editVaultModal" data-vault-name="<?php echo $row['vault_name']; ?>"
-                                        data-vault-id="<?php echo $row['vault_id']; ?>">Edit</button>
+                                    <?php
+                                        $canManageVault = (isset($_SESSION['isSiteAdministrator']) && $_SESSION['isSiteAdministrator'] == true) || (isset($row['role']) && $row['role'] === 'Owner');
+                                    ?>
 
-                                    <!-- Delete button to open a modal for deleting a vault -->
-                                    <button class="btn btn-danger btn-sm delete-btn" data-toggle="modal"
-                                        data-target="#deleteVaultModal" data-vault-name="<?php echo $row['vault_name']; ?>"
-                                        data-vault-id="<?php echo $row['vault_id']; ?>">Delete</button>
+                                    <?php if ($canManageVault): ?>
+                                        <!-- Edit button to open a modal for editing a vault -->
+                                        <button class="btn btn-warning btn-sm edit-btn" data-toggle="modal"
+                                            data-target="#editVaultModal" data-vault-name="<?php echo $row['vault_name']; ?>"
+                                            data-vault-id="<?php echo $row['vault_id']; ?>">Edit</button>
+
+                                        <!-- Delete button to open a modal for deleting a vault -->
+                                        <button class="btn btn-danger btn-sm delete-btn" data-toggle="modal"
+                                            data-target="#deleteVaultModal" data-vault-name="<?php echo $row['vault_name']; ?>"
+                                            data-vault-id="<?php echo $row['vault_id']; ?>">Delete</button>
+                                    <?php endif; ?>
                                 </td>
                             </tr>
                         <?php endwhile; ?>
                     </tbody>
                 </table>
+                    <?php endif; // end searchError check ?>
     </div>
 
     <!-- Modal for adding a new vault -->
