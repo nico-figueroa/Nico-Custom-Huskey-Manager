@@ -1,6 +1,6 @@
 <?php
 
-include '../components/loggly-logger.php';
+include '../components/logger.php';
 // Replace with your database connection details
 $hostname = 'backend-mysql-database';
 $username = 'user';
@@ -13,13 +13,19 @@ $conn = new mysqli($hostname, $username, $password, $database);
 if ($conn->connect_error) {
     $logger->alert("Database connection failed");
     die ('A fatal error occurred and has been logged.');
-    // die("Connection failed: " . $conn->connect_error);
 }
 
 $uploadDir = './uploads/'; // Specify the directory where you want to save the uploaded files
 
 include '../components/authenticate.php';
 include '../components/authorization.php';
+
+requireCsrfToken();
+
+function isValidPasswordString(string $password): bool
+{
+    return preg_match('/^[\x20-\x7E]{8,128}$/', $password) === 1;
+}
 
 $vaultId = isset($_GET['vault_id']) ? intval($_GET['vault_id']) : (isset($_POST['vaultId']) ? intval($_POST['vaultId']) : 0);
 if ($vaultId <= 0) {
@@ -53,26 +59,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['addUsername']) && is
         $uploadFile = $uploadDir . basename($_FILES['file']['name']);
 
         if (move_uploaded_file($_FILES['file']['tmp_name'], $uploadFile)) {
-            $filePath = "'" . $uploadFile . "'";
+            $filePath = $uploadFile;
         } else {
             // Handle file upload error            
             die ('Error uploading file.');
         }
     } else {
         // If no file is uploaded, set the file path to NULL
-        $filePath = "NULL";
+        $filePath = null;
     }
 
-    $queryAddPassword = "INSERT INTO vault_passwords (vault_id, username, website, password, notes, file_path) 
-                     VALUES ($vaultId, '$addUsername', '$addWebsite', '$addPassword', '$addNotes', $filePath)";
+    if (!isValidPasswordString($addPassword)) {
+        die('Invalid password format. Password must be 8-128 printable ASCII characters.');
+    }
 
-    $resultAddPassword = $conn->query($queryAddPassword);
+    $stmtAddPassword = null;
+    if ($filePath === null) {
+        $stmtAddPassword = $conn->prepare("INSERT INTO vault_passwords (vault_id, username, website, password, notes, file_path) VALUES (?, ?, ?, ?, ?, NULL)");
+        if ($stmtAddPassword) {
+            $stmtAddPassword->bind_param('issss', $vaultId, $addUsername, $addWebsite, $addPassword, $addNotes);
+        }
+    } else {
+        $stmtAddPassword = $conn->prepare("INSERT INTO vault_passwords (vault_id, username, website, password, notes, file_path) VALUES (?, ?, ?, ?, ?, ?)");
+        if ($stmtAddPassword) {
+            $stmtAddPassword->bind_param('isssss', $vaultId, $addUsername, $addWebsite, $addPassword, $addNotes, $filePath);
+        }
+    }
 
-    if (!$resultAddPassword) {
-
+    if (!$stmtAddPassword || !$stmtAddPassword->execute()) {
+        $logger->alert('Failed adding password: ' . ($stmtAddPassword ? $stmtAddPassword->error : $conn->error));
         die ('A fatal error occurred and has been logged.');
-        // die("Error adding password: " . $conn->error);
     }
+    $stmtAddPassword->close();
     // Redirect to the current page after adding the password
     header("Location: {$_SERVER['PHP_SELF']}?vault_id=$vaultId");
     exit();
@@ -88,7 +106,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['editPasswordId']) &&
     $editWebsite = $_POST['editWebsite'];
     $editPassword = $_POST['editPassword'];
     $editNotes = $_POST['editNotes'];
-    $editPasswordId = $_POST['editPasswordId'];
+    $editPasswordId = intval($_POST['editPasswordId']);
 
     // Check if a new file is uploaded
     if (!empty ($_FILES['editFile']['name'])) {
@@ -102,41 +120,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['editPasswordId']) &&
         }
     } else {
         // If no new file is uploaded, preserve the existing file path
-        $queryGetFilePath = "SELECT file_path FROM vault_passwords WHERE password_id = $editPasswordId";
-        $resultGetFilePath = $conn->query($queryGetFilePath);
-
-        if ($resultGetFilePath && $resultGetFilePath->num_rows > 0) {
-            $row = $resultGetFilePath->fetch_assoc();
-            $existingFilePath = $row['file_path'];
-            $filePath = $existingFilePath;
+        $stmtGetFilePath = $conn->prepare("SELECT file_path FROM vault_passwords WHERE password_id = ?");
+        if ($stmtGetFilePath) {
+            $stmtGetFilePath->bind_param('i', $editPasswordId);
+            $stmtGetFilePath->execute();
+            $resultGetFilePath = $stmtGetFilePath->get_result();
+            if ($resultGetFilePath && $resultGetFilePath->num_rows > 0) {
+                $row = $resultGetFilePath->fetch_assoc();
+                $existingFilePath = $row['file_path'];
+                $filePath = $existingFilePath;
+            } else {
+                die ('Error retrieving existing file path.');
+            }
+            $stmtGetFilePath->close();
         } else {
-            // Handle error if existing file path retrieval fails
-
             die ('Error retrieving existing file path.');
         }
     }
 
-    // Check if filePath is NULL to properly format it in the query
-    if ($filePath === "NULL" || $filePath === null) {
-        $filePathSQL = "NULL";
+    if (!isValidPasswordString($editPassword)) {
+        die('Invalid password format. Password must be 8-128 printable ASCII characters.');
+    }
+
+    if ($filePath === null) {
+        $stmtEditPassword = $conn->prepare("UPDATE vault_passwords SET username = ?, website = ?, password = ?, notes = ?, file_path = NULL WHERE password_id = ?");
+        if ($stmtEditPassword) {
+            $stmtEditPassword->bind_param('ssssi', $editUsername, $editWebsite, $editPassword, $editNotes, $editPasswordId);
+        }
     } else {
-        $filePathSQL = "'" . $filePath . "'";
+        $stmtEditPassword = $conn->prepare("UPDATE vault_passwords SET username = ?, website = ?, password = ?, notes = ?, file_path = ? WHERE password_id = ?");
+        if ($stmtEditPassword) {
+            $stmtEditPassword->bind_param('sssssi', $editUsername, $editWebsite, $editPassword, $editNotes, $filePath, $editPasswordId);
+        }
     }
 
-    $queryEditPassword = "UPDATE vault_passwords 
-                        SET username = '$editUsername', website = '$editWebsite', 
-                        password = '$editPassword', notes = '$editNotes', file_path = $filePathSQL
-                        WHERE password_id = $editPasswordId";
-
-    $resultEditPassword = $conn->query($queryEditPassword);
-
-    if (!$resultEditPassword) {
-
+    if (!$stmtEditPassword || !$stmtEditPassword->execute()) {
         $logger->alert("Database connection failed editing password");
-        die ('A fatal error occurred and has been logged. File: ' . $filePathSQL . 'Query: ' . $queryEditPassword . ' Error: ' . $conn->error);
+        die ('A fatal error occurred and has been logged.');
     }
+    $stmtEditPassword->close();
 
-    $logger->notice("Password for $editUsername was modified");
+    $logger->warning("Password for $editUsername was modified");
     // Redirect to the current page after updating the password
     header("Location: {$_SERVER['PHP_SELF']}?vault_id=$vaultId");
     exit();
@@ -145,23 +169,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['editPasswordId']) &&
 
 // Delete Password
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['deletePasswordId']) && isset ($_POST['vaultId'])) {
-    $deletePasswordId = $_POST['deletePasswordId'];
+    $deletePasswordId = intval($_POST['deletePasswordId']);
     $vaultId = intval($_POST['vaultId']);
     if (!hasPermission('DELETE', $vaultId)) {
         die('Unauthorized action on this vault.');
     }
 
-    $queryDeletePassword = "DELETE FROM vault_passwords WHERE password_id = $deletePasswordId";
-    $resultDeletePassword = $conn->query($queryDeletePassword);
-
-    if (!$resultDeletePassword) {
-
-        $logger->alert("Database connection failed deleting password");
+    $stmtDeletePassword = $conn->prepare("DELETE FROM vault_passwords WHERE password_id = ?");
+    if ($stmtDeletePassword) {
+        $stmtDeletePassword->bind_param('i', $deletePasswordId);
+        if (!$stmtDeletePassword->execute()) {
+            $logger->alert("Database connection failed deleting password: " . $stmtDeletePassword->error);
+            die ('A fatal error occurred and has been logged.');
+        }
+        $stmtDeletePassword->close();
+    } else {
+        $logger->alert("Database connection failed preparing delete password: " . $conn->error);
         die ('A fatal error occurred and has been logged.');
-        // die("Error deleting password: " . $conn->error);
     }
 
-    $logger->notice("Password was deleted from $vaultId");
+    $logger->warning("Password was deleted from $vaultId");
     // Redirect to the current page after deleting the password
     header("Location: {$_SERVER['PHP_SELF']}?vault_id=$vaultId");
     exit();
@@ -170,22 +197,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['deletePasswordId']) 
 // Retrieve vault information
 $vaultId = isset ($_GET['vault_id']) ? $_GET['vault_id'] : 0;
 
-$query = "SELECT vault_name FROM vaults WHERE vault_id = $vaultId";
-$result = $conn->query($query);
-
-if (!$result) {
-    $logger->alert("Database connection failed");
-    die ("Query failed: " . $conn->error);
+$stmtVault = $conn->prepare("SELECT vault_name FROM vaults WHERE vault_id = ?");
+if ($stmtVault) {
+    $stmtVault->bind_param('i', $vaultId);
+    $stmtVault->execute();
+    $result = $stmtVault->get_result();
+    if (!$result) {
+        $logger->alert("Database connection failed");
+        die ("Query failed: " . $conn->error);
+    }
+    $row = $result->fetch_assoc();
+    $vaultName = $row['vault_name'];
+    $stmtVault->close();
+} else {
+    $logger->alert("Database connection failed preparing vault select: " . $conn->error);
+    die ('A fatal error occurred and has been logged.');
 }
 
-$row = $result->fetch_assoc();
-$vaultName = $row['vault_name'];
-
+//$row = $result->fetch_assoc();
+//$vaultName = $row['vault_name'];
 
 $queryPasswords = "SELECT * FROM vault_passwords WHERE vault_id = $vaultId";
 
 $searchQuery = "";
 $searchTerm = "";
+$searchError = '';
 // Handle a Search request
 if (isset ($_GET['searchQuery']) && trim($_GET['searchQuery']) !== '') {
     $searchQuery = trim($_GET['searchQuery']);
@@ -200,44 +236,62 @@ if (isset ($_GET['searchQuery']) && trim($_GET['searchQuery']) !== '') {
 $resultPasswords = $conn->query($queryPasswords);
 
 if (!$resultPasswords) {
-    die ("Query failed: " . $conn->error);
+    $logger->alert("Password search query failed for vault $vaultId: " . $conn->error);
+    $searchError = 'An error occurred while searching passwords.';
+    $resultPasswords = $conn->query("SELECT * FROM vault_passwords WHERE vault_id = $vaultId AND 1=0");
+}
+
+// Check if search was performed but returned no results
+if ($searchTerm !== '' && $resultPasswords->num_rows === 0) {
+    $searchError = 'No passwords match your search criteria.';
+    $logger->warning("User searched for '$searchTerm' in vault $vaultId but no passwords matched");
 }
 
 // Handle file deletion
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['deleteFilePasswordId']) && isset ($_POST['deleteFileSubmit'])) {
-    $deleteFilePasswordId = $_POST['deleteFilePasswordId'];
+    $deleteFilePasswordId = intval($_POST['deleteFilePasswordId']);
     $vaultId = intval($_POST['deleteFileVaultId']);
     if (!hasPermission('WRITE', $vaultId)) {
         die('Unauthorized action on this vault.');
     }
 
     // Retrieve the file path from the database using the password id
-    $queryGetFilePath = "SELECT file_path FROM vault_passwords WHERE password_id = $deleteFilePasswordId";
-    $resultGetFilePath = $conn->query($queryGetFilePath);
+    $stmtGetFilePath = $conn->prepare("SELECT file_path FROM vault_passwords WHERE password_id = ?");
+    if ($stmtGetFilePath) {
+        $stmtGetFilePath->bind_param('i', $deleteFilePasswordId);
+        $stmtGetFilePath->execute();
+        $resultGetFilePath = $stmtGetFilePath->get_result();
+        if ($resultGetFilePath && $resultGetFilePath->num_rows > 0) {
+            $row = $resultGetFilePath->fetch_assoc();
+            $filePathToDelete = $row['file_path'];
 
-    if ($resultGetFilePath && $resultGetFilePath->num_rows > 0) {
-        $row = $resultGetFilePath->fetch_assoc();
-        $filePathToDelete = $row['file_path'];
-
-        // Delete the file from the server
-        if ($filePathToDelete && file_exists($filePathToDelete)) {
-            if (unlink($filePathToDelete)) {
-                // File deleted successfully
-                // Now update the file path in the database to NULL
-                $queryUpdateFilePath = "UPDATE vault_passwords SET file_path = NULL WHERE password_id = $deleteFilePasswordId";
-                $resultUpdateFilePath = $conn->query($queryUpdateFilePath);
-
-                if (!$resultUpdateFilePath) {
-                    die ('A fatal error occurred and has been logged.');
+            // Delete the file from the server
+            if ($filePathToDelete && file_exists($filePathToDelete)) {
+                if (unlink($filePathToDelete)) {
+                    // File deleted successfully
+                    // Now update the file path in the database to NULL
+                    $stmtUpdateFilePath = $conn->prepare("UPDATE vault_passwords SET file_path = NULL WHERE password_id = ?");
+                    if ($stmtUpdateFilePath) {
+                        $stmtUpdateFilePath->bind_param('i', $deleteFilePasswordId);
+                        if (!$stmtUpdateFilePath->execute()) {
+                            die ('A fatal error occurred and has been logged.');
+                        }
+                        $stmtUpdateFilePath->close();
+                    } else {
+                        die ('A fatal error occurred and has been logged.');
+                    }
+                } else {
+                    die ('A fatal error occurred while deleting the file.');
                 }
             } else {
-                die ('A fatal error occurred while deleting the file.');
+                die ('The file to be deleted does not exist.');
             }
         } else {
-            die ('The file to be deleted does not exist.');
+            die ('The file path associated with the password was not found.');
         }
+        $stmtGetFilePath->close();
     } else {
-        die ('The file path associated with the password was not found.');
+        die ('A fatal error occurred and has been logged.');
     }
 
     // Redirect to the current page after deleting the file
@@ -256,7 +310,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['deleteFilePasswordId
         <?php echo $vaultName; ?> Vault
     </title>
     <!-- Add Bootstrap CSS link here -->
-    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css">
+    <!-- <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/css/bootstrap.min.css" integrity="sha384-xOolHFLEh07PJGoPkLv1IbcEPTNtaed2xpHsD9ESMhqIYd0nLMwNLD69Npy4HI+N" crossorigin="anonymous"> -->
+    <link rel="stylesheet" href="/css/matrix.css">
 </head>
 
 <body>
@@ -266,7 +321,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['deleteFilePasswordId
 
     <div class="container mt-4">
         <h2>
-            <?php echo $vaultName; ?> Vault Passwords
+            <?php echo htmlspecialchars($vaultName); ?> Vault Passwords
         </h2>
         <?php if ($canWrite): ?>
             <button type="button" class="btn btn-primary mb-2" data-toggle="modal" data-target="#addPasswordModal">
@@ -278,12 +333,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['deleteFilePasswordId
                 Permissions </a>
         <?php endif; ?>
 
-        <input type="text" id="searchInput" onkeyup="searchTable(event)" placeholder="Search for passwords..."
+        <input type="text" id="searchInput" placeholder="Search for passwords..."
             class="form-control mb-3">
-            <?php if (!empty ($searchQuery)) {
-                    // If $searchQuery is not blank, display the label with its value
-                    echo "<label>Search Results for : " . $searchQuery . "</label>"; 
-                } ?>
+        
+        <?php if (!empty ($searchQuery)) {
+            // If $searchQuery is not blank, display the label with its value
+            echo "<label>Search Results for : " . htmlspecialchars($searchQuery) . "</label>"; 
+        }
+        
+        if ($searchError !== ''): ?>
+            <div class="alert alert-danger" role="alert"><?php echo htmlspecialchars($searchError); ?></div>
+        <?php else: ?>
         <table class="table table-bordered" id="passwordTable">
             <thead>
                 <tr>
@@ -299,26 +359,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['deleteFilePasswordId
                 <?php while ($rowPassword = $resultPasswords->fetch_assoc()): ?>
                     <tr data-password-id="<?php echo $rowPassword['password_id']; ?>">
                         <td>
-                            <?php echo $rowPassword['username']; ?>
+                            <?php echo htmlspecialchars($rowPassword['username']); ?>
                         </td>
                         <td>
-                            <?php echo $rowPassword['website']; ?>
+                            <?php echo htmlspecialchars($rowPassword['website']); ?>
                         </td>
                         <td>
-                            <input type="password" class="password-field" value="<?php echo $rowPassword['password']; ?>"
+                            <input type="password" class="password-field" value="<?php echo htmlspecialchars($rowPassword['password']); ?>"
                                 disabled>
                         </td>
                         <td>
-                            <?php echo $rowPassword['notes']; ?>
+                            <?php echo htmlspecialchars($rowPassword['notes']); ?>
                         </td>
                         <td>
-                            <button class="btn btn-primary btn-sm show-password-btn" data-entry-id="<?= $entry['id'] ?>">Show Password</button>
+                            <button class="btn btn-primary btn-sm show-password-btn" data-entry-id="<?= $rowPassword['password_id'] ?>">Show Password</button>
                             <?php if ($canWrite): ?>
                                 <button class="btn btn-warning btn-sm edit-password-btn" data-toggle="modal"
-                                    data-target="#editPasswordModal" data-password-notes="<?php echo $rowPassword['notes']; ?>"
-                                    data-password-password="<?php echo $rowPassword['password']; ?>"
-                                    data-password-website="<?php echo $rowPassword['website']; ?>"
-                                    data-password-username="<?php echo $rowPassword['username']; ?>"
+                                    data-target="#editPasswordModal" data-password-notes="<?php echo htmlspecialchars($rowPassword['notes']); ?>"
+                                    data-password-password="<?php echo htmlspecialchars($rowPassword['password']); ?>"
+                                    data-password-website="<?php echo htmlspecialchars($rowPassword['website']); ?>"
+                                    data-password-username="<?php echo htmlspecialchars($rowPassword['username']); ?>"
                                     data-password-id="<?php echo $rowPassword['password_id']; ?>">Edit</button>
                             <?php endif; ?>
                             <?php if ($canDelete): ?>
@@ -333,6 +393,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['deleteFilePasswordId
                                     target="_blank">Download File</a>
                                 <?php if ($canWrite): ?>
                                     <form method="POST" action="<?php echo $_SERVER['PHP_SELF']; ?>">
+                                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(getCsrfToken(), ENT_QUOTES, 'UTF-8'); ?>">
                                         <input type="hidden" name="deleteFilePasswordId"
                                             value="<?php echo $rowPassword['password_id']; ?>">
                                         <input type="hidden" name="deleteFileVaultId" value="<?php echo $vaultId; ?>">
@@ -346,36 +407,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['deleteFilePasswordId
                 <?php endwhile; ?>
             </tbody>
         </table>
+        <?php endif; // end searchError check ?>
     </div>
-
-    <script>
-        document.addEventListener('DOMContentLoaded', function () {
-            var showPasswordButtons = document.querySelectorAll('.show-password-btn');
-            showPasswordButtons.forEach(function (button) {
-                button.addEventListener('click', function () {
-                    var passwordField = button.closest('tr').querySelector('.password-field');
-                    passwordField.type = (passwordField.type === 'password') ? 'text' : 'password';
-                    // ✔️ LOGGER: Only fire when password becomes visible
-                    if (passwordField.type === 'text') {
-                        fetch('/components/log_password_reveal.php', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                entry_id: button.dataset.entryId,   // you already have entryId in the button
-                                timestamp: Date.now()
-                            })
-                        });
-                    }
-                    if (button.textContent == 'Show Password') {
-                        button.textContent = 'Hide Password';
-                    } else {
-                        button.textContent = 'Show Password';
-                    }
-                });
-            });
-        });
-    </script>
-
 
     <div class="modal" id="addPasswordModal">
         <div class="modal-dialog">
@@ -392,6 +425,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['deleteFilePasswordId
                     <!-- Add form for adding a new password here -->
                     <form method="POST" id="addPasswordForm" enctype="multipart/form-data">
                         <input type="hidden" id="addVaultId" name="vaultId" value="<?php echo $vaultId; ?>">
+                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(getCsrfToken(), ENT_QUOTES, 'UTF-8'); ?>">
                         <div class="form-group">
                             <label for="addUsername">Username:</label>
                             <input type="text" class="form-control" id="addUsername" name="addUsername" required>
@@ -402,7 +436,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['deleteFilePasswordId
                         </div>
                         <div class="form-group">
                             <label for="addPassword">Password:</label>
-                            <input type="password" class="form-control" id="addPassword" name="addPassword" required>
+                            <input type="password" class="form-control" id="addPassword" name="addPassword" required minlength="8" maxlength="128">
                         </div>
                         <div class="form-group">
                             <label for="addNotes">Notes:</label>
@@ -436,6 +470,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['deleteFilePasswordId
                     <!-- Add form for editing a password here -->
                     <form method="POST" id="editPasswordForm" enctype="multipart/form-data">
                         <input type="hidden" id="editVaultId" name="vaultId" value="<?php echo $vaultId; ?>">
+                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(getCsrfToken(), ENT_QUOTES, 'UTF-8'); ?>">
                         <div class="form-group">
                             <label for="editUsername">Username:</label>
                             <input type="text" class="form-control" id="editUsername" name="editUsername" required>
@@ -446,7 +481,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['deleteFilePasswordId
                         </div>
                         <div class="form-group">
                             <label for="editPassword">Password:</label>
-                            <input type="password" class="form-control" id="editPassword" name="editPassword" required>
+                            <input type="password" class="form-control" id="editPassword" name="editPassword" required minlength="8" maxlength="128">
                         </div>
                         <div class="form-group">
                             <label for="editNotes">Notes:</label>
@@ -481,6 +516,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['deleteFilePasswordId
                     <p>Are you sure you want to delete this password?</p>
                     <!-- Add hidden input for password ID -->
                     <form method="POST" id="deletePasswordForm">
+                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(getCsrfToken(), ENT_QUOTES, 'UTF-8'); ?>">
                         <input type="hidden" id="deleteVaultId" name="vaultId" value="<?php echo $vaultId; ?>">
                         <input type="hidden" id="deletePasswordId" name="deletePasswordId">
                         <button type="submit" class="btn btn-danger" id="confirmDeletePasswordBtn">Delete</button>
@@ -492,47 +528,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['deleteFilePasswordId
     </div>
 
     <!-- Add Bootstrap JS and Popper.js scripts here -->
-    <script src="https://code.jquery.com/jquery-3.3.1.slim.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.7/umd/popper.min.js"></script>
-    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.slim.min.js" integrity="sha384-5AkRS45j4ukf+JbWAfHL8P4onPA9p0KwwP7pUdjSQA3ss9edbJUJc/XcYAiheSSz" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.16.1/umd/popper.min.js" integrity="sha384-9/reFTGAW83EW2RDu2S0VKaIzap3H66lZH81PoYlFhbGU+6BZp6G7niu735Sk7lN" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/js/bootstrap.min.js" integrity="sha384-+sLIOodYLS7CIrQpBjl+C7nPvqq+FbNUBDunl/OZv93DB7Ln/533i8e/mZXLi/P+" crossorigin="anonymous"></script>
+    <script src="/js/site.js"></script>
     <!-- Add your custom JavaScript script for handling modals and row click redirection -->
-    <script>
-
-        function searchTable(event) {
-
-            if (event.keyCode === 13) {
-                var searchInput = document.getElementById("searchInput").value;
-                window.location.href = "./vault_details.php?vault_id=<?php echo $vaultId ?>&searchQuery=" + searchInput;
-            }
-        }
-
-
-        document.addEventListener("DOMContentLoaded", function () {
-            // Handle edit button click for passwords
-            var editPasswordButtons = document.querySelectorAll('.edit-password-btn');
-            editPasswordButtons.forEach(function (button) {
-                button.addEventListener('click', function () {
-
-                    document.getElementById('editPasswordId').value = button.getAttribute('data-password-id');;
-                    document.getElementById('editUsername').value = button.getAttribute('data-password-username');;
-                    document.getElementById('editWebsite').value = button.getAttribute('data-password-website');;
-                    document.getElementById('editPassword').value = button.getAttribute('data-password-password');;
-                    document.getElementById('editNotes').value = button.getAttribute('data-password-notes');;
-                });
-            });
-
-            // Handle delete button click for passwords
-            var deletePasswordButtons = document.querySelectorAll('.delete-password-btn');
-            deletePasswordButtons.forEach(function (button) {
-                button.addEventListener('click', function () {
-                    var passwordId = button.getAttribute('data-password-id');
-                    console.log('Setting Delete Password ID to : ' + passwordId);
-                    document.getElementById('deletePasswordId').value = passwordId
-                });
-            });
-        });
-    </script>
-</body>
+    </body>
 
 </html>
 

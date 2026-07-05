@@ -8,6 +8,13 @@ function isSiteAdmin() {
     return isset($_SESSION['isSiteAdministrator']) && $_SESSION['isSiteAdministrator'] == true;
 }
 
+function requireSiteAdministrator() {
+    if (!isSiteAdmin()) {
+        header('Location: /index.php');
+        exit;
+    }
+}
+
 function getLogger() {
     return $GLOBALS['logger'] ?? null;
 }

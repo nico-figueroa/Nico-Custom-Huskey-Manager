@@ -1,6 +1,8 @@
 <?php
 
 include '../components/authenticate.php';
+include '../components/authorization.php';
+include '../components/logger.php';
 
 $hostname = 'backend-mysql-database';
 $username = 'user';
@@ -9,19 +11,19 @@ $database = 'password_manager';
 
 $conn = new mysqli($hostname, $username, $password, $database);
 if ($conn->connect_error) {
+    $logger->alert("Connection failed: " . $conn->connect_error);
     die('A fatal error occurred and has been logged.');
 }
 
 // Make the connection available to the authorization helper
 $GLOBALS['conn'] = $conn;
 
-include '../components/authorization.php';
-
 if (isset($_GET['file']) && isset($_GET['vault_id'])) {
     $filePath = $_GET['file'];
     $vaultId = intval($_GET['vault_id']);
 
     if (!canReadVault($vaultId)) {
+        $logger->warning("Unauthorized access attempt to vault ID $vaultId");
         die('Unauthorized access to this vault.');
     }
 
@@ -41,9 +43,11 @@ if (isset($_GET['file']) && isset($_GET['vault_id'])) {
         exit;
     } else {
         echo $filePath;
+        $logger->warning("File not found: $filePath");
         die('File not found.');
     }
 } else {
+    $logger->warning("Invalid file request: missing 'file' or 'vault_id' parameter");
     die('Invalid file request.');
 }
 

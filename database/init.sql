@@ -5,11 +5,11 @@ CREATE DATABASE IF NOT EXISTS password_manager;
 USE password_manager;
 
 -- Drop tables if they exist (now that database is selected)
---DROP TABLE IF EXISTS vault_permissions;
---DROP TABLE IF EXISTS vault_passwords;
---DROP TABLE IF EXISTS vaults;
---DROP TABLE IF EXISTS users;
---DROP TABLE IF EXISTS roles;
+-- DROP TABLE IF EXISTS vault_permissions;
+-- DROP TABLE IF EXISTS vault_passwords;
+-- DROP TABLE IF EXISTS vaults;
+-- DROP TABLE IF EXISTS users;
+-- DROP TABLE IF EXISTS roles;
 
 -- Create the roles table
 CREATE TABLE IF NOT EXISTS roles (

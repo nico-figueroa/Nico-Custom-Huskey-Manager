@@ -2,8 +2,9 @@
 
 include '../components/authenticate.php';
 include '../components/authorization.php';
+include '../components/logger.php';
 
-include '../components/loggly-logger.php';
+requireCsrfToken();
 
 $hostname = 'backend-mysql-database';
 $username = 'user';
@@ -13,10 +14,8 @@ $database = 'password_manager';
 $conn = new mysqli($hostname, $username, $password, $database);
 
 if ($conn->connect_error) {
-
-    $logger->alert("Database connection failed");    
+    $logger->alert("Connection failed to MySQL database");
     die ('A fatal error occurred and has been logged.');
-    //die("Connection failed: " . $conn->connect_error);
 }
 
 // Add Vault
@@ -24,45 +23,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['vaultName'])) {
     $vaultName = $_POST['vaultName'];
     $userId = 1; // Replace with the actual user ID
 
-    $query = "INSERT INTO vaults (vault_name) VALUES ('$vaultName')";
-    $result = $conn->query($query);
-
-    if (!$result) {
-
-        $logger->alert("Connection failed adding vault");
+    $stmt = $conn->prepare("INSERT INTO vaults (vault_name) VALUES (?)");
+    if ($stmt) {
+        $stmt->bind_param('s', $vaultName);
+        if (!$stmt->execute()) {
+            $logger->alert("Connection failed adding vault: " . $stmt->error);
+            die ('A fatal error occurred and has been logged.');
+        }
+        $insertedVaultId = $stmt->insert_id;
+        $stmt->close();
+    } else {
+        $logger->alert("Connection failed preparing add vault: " . $conn->error);
         die ('A fatal error occurred and has been logged.');
-        // die("Error adding vault: " . $conn->error);
     }
-
-    // Retrieve the ID of the inserted vault
-    $insertedVaultId = $conn->insert_id;
-
-    // We need to fetch the user_id based off the username in order to complete the permission insert, we are going to default to Owner for the role so we can hardcode that without looking it up
 
     $user = $_SESSION['authenticated'];
-    $queryFetchUserId = "SELECT user_id FROM users WHERE username = '$user'";
-    $resultFetchUserId = $conn->query($queryFetchUserId);
+    $stmtFetchUserId = $conn->prepare("SELECT user_id FROM users WHERE username = ?");
+    if ($stmtFetchUserId) {
+        $stmtFetchUserId->bind_param('s', $user);
+        $stmtFetchUserId->execute();
+        $resultFetchUserId = $stmtFetchUserId->get_result();
+        if ($resultFetchUserId && $resultFetchUserId->num_rows > 0) {
+            $row = $resultFetchUserId->fetch_assoc();
+            $userId = $row['user_id'];
+            $roleId = 1;
 
-    if ($resultFetchUserId && $resultFetchUserId->num_rows > 0) {
-        // Fetch user_id from the result set
-        $row = $resultFetchUserId->fetch_assoc();
-        $userId = $row['user_id'];
-        $roleId = 1;
-
-        // If user_id is found, insert the permission
-        $queryInsertPermission = "INSERT INTO vault_permissions (user_id, vault_id, role_id) VALUES ($userId, $insertedVaultId, $roleId)";
-        $resultInsertPermission = $conn->query($queryInsertPermission);
-
-        if (!$resultInsertPermission) {
-
-            //  die("Error adding permission, Query : " .  $queryInsertPermission . " Error Info : " . $conn->error);
-            die ('A fatal error occurred while adding permission.');
+            $stmtInsertPermission = $conn->prepare("INSERT INTO vault_permissions (user_id, vault_id, role_id) VALUES (?, ?, ?)");
+            if ($stmtInsertPermission) {
+                $stmtInsertPermission->bind_param('iii', $userId, $insertedVaultId, $roleId);
+                if (!$stmtInsertPermission->execute()) {
+                    $logger->alert("Connection failed adding vault permission: " . $stmtInsertPermission->error);
+                    die ('A fatal error occurred while adding permission.');
+                }
+                $stmtInsertPermission->close();
+            } else {
+                $logger->alert("Connection failed preparing vault permission insert: " . $conn->error);
+                die ('A fatal error occurred while adding permission.');
+            }
+        } else {
+            $logger->alert("User with username '$user' not found.");
+            die ("User with username '$user' not found.");
         }
+        $stmtFetchUserId->close();
     } else {
-        die ("User with username '$user' not found.");
+        $logger->alert("Connection failed preparing fetch user id: " . $conn->error);
+        die ('A fatal error occurred and has been logged.');
     }
 
-    // Redirect to the current page after adding the vault
     header("Location: {$_SERVER['PHP_SELF']}");
     exit();
 }
@@ -70,39 +77,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['vaultName'])) {
 // Edit Vault
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['editVaultName']) && isset ($_POST['editVaultId'])) {
     $editVaultName = $_POST['editVaultName'];
-    $editVaultId = $_POST['editVaultId'];
+    $editVaultId = intval($_POST['editVaultId']);
 
-    $query = "UPDATE vaults SET vault_name = '$editVaultName' WHERE vault_id = $editVaultId";
-    $result = $conn->query($query);
-
-    if (!$result) {
-        
-        $logger->alert("Connection failed editing vault");
+    $stmt = $conn->prepare("UPDATE vaults SET vault_name = ? WHERE vault_id = ?");
+    if ($stmt) {
+        $stmt->bind_param('si', $editVaultName, $editVaultId);
+        if (!$stmt->execute()) {
+            $logger->alert("Connection failed editing vault: " . $stmt->error);
+            die ('A fatal error occurred and has been logged.');
+        }
+        $stmt->close();
+    } else {
+        $logger->alert("Connection failed preparing edit vault: " . $conn->error);
         die ('A fatal error occurred and has been logged.');
-        // die("Error editing vault: " . $conn->error);
     }
 
-    $logger->notice("Vault $editVaultName modified");
-    // Redirect to the current page after editing the vault
+    $logger->warning("Vault $editVaultName modified");
     header("Location: {$_SERVER['PHP_SELF']}");
     exit();
 }
 
 // Delete Vault
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset ($_POST['deleteVaultId']) && !empty ($_POST['deleteVaultId'])) {
-    $deleteVaultId = $_POST['deleteVaultId'];
+    $deleteVaultId = intval($_POST['deleteVaultId']);
 
-    $query = "DELETE FROM vaults WHERE vault_id = $deleteVaultId";
-
-    $result = $conn->query($query);
-
-    if (!$result) {
-        $logger->alert("Connection failed deleting vault");
+    $stmt = $conn->prepare("DELETE FROM vaults WHERE vault_id = ?");
+    if ($stmt) {
+        $stmt->bind_param('i', $deleteVaultId);
+        if (!$stmt->execute()) {
+            $logger->alert("Connection failed deleting vault: " . $stmt->error);
+            die ('A fatal error occurred and has been logged.');
+        }
+        $stmt->close();
+    } else {
+        $logger->alert("Connection failed preparing delete vault: " . $conn->error);
         die ('A fatal error occurred and has been logged.');
-        //die("Error deleting vault: " . $conn->error);
     }
-    $logger->notice("Vault $deleteVaultId deleted");
-    // Redirect to the current page after deleting the vault
+
+    $logger->warning("Vault $deleteVaultId deleted");
     header("Location: {$_SERVER['PHP_SELF']}");
     exit();
 }
@@ -120,6 +132,7 @@ $query = getAuthorizedVaultsQuery($searchTerm);
 $result = $conn->query($query);
 
 if (!$result) {
+    $logger->alert("Connection failed retrieving vaults");
     die ("Query failed: " . $conn->error);
 }
 // If a search was performed but returned no authorized vaults, check whether
@@ -132,8 +145,10 @@ if ($searchTerm !== '' && $result->num_rows === 0) {
     $globalResult = $conn->query($globalQuery);
     if ($globalResult && $globalResult->num_rows > 0) {
         $searchError = 'You have not been granted permissions for the specified vault.';
+        $logger->warning("User searched for '$searchTerm' but lacks permissions for matching vaults");
     } else {
         $searchError = 'No vaults match your search.';
+        $logger->warning("User searched for '$searchTerm' but no vaults match the search");
     }
 }
 ?>
@@ -146,8 +161,9 @@ if ($searchTerm !== '' && $result->num_rows === 0) {
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
     <title>Vaults</title>
     <!-- Add Bootstrap CSS link here -->
-    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
-    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css">
+    <script src="https://code.jquery.com/jquery-3.7.1.slim.min.js" integrity="sha384-5AkRS45j4ukf+JbWAfHL8P4onPA9p0KwwP7pUdjSQA3ss9edbJUJc/XcYAiheSSz" crossorigin="anonymous"></script>
+    <!-- <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/css/bootstrap.min.css" integrity="sha384-xOolHFLEh07PJGoPkLv1IbcEPTNtaed2xpHsD9ESMhqIYd0nLMwNLD69Npy4HI+N" crossorigin="anonymous"> -->
+    <link rel="stylesheet" href="/css/matrix.css">
 </head>
 
 <body>
@@ -162,60 +178,58 @@ if ($searchTerm !== '' && $result->num_rows === 0) {
             Add Vault
         </button>
 
+        <!-- Search input -->
+        <input type="text" id="searchInput" placeholder="Search for vaults..."
+            class="form-control mb-3">
+        
+        <?php if (!empty ($searchQuery)) {
+            // If $searchQuery is not blank, display the label with its value
+            echo "<label>Search Results for : " . htmlspecialchars($searchQuery) . "</label>"; 
+        }
+        
+        if ($searchError !== ''): ?>
+            <div class="alert alert-danger" role="alert"><?php echo htmlspecialchars($searchError); ?></div>
+        <?php else: ?>
+        
         <!-- Table to display vaults -->
-        <table class="table">
+        <table class="table table-bordered" id="vaultTable">
             <thead>
-                
-                <input type="text" id="searchInput" onkeypress="searchTable(event)" placeholder="Search for vaults..."
-                    class="form-control mb-3">
-                    <?php if (!empty ($searchQuery)) {
-                            // If $searchQuery is not blank, display the label with its value
-                            echo "<label>Search Results for : " . htmlspecialchars($searchQuery) . "</label>"; 
-                        }
+                <tr>
+                    <th>Vault Name</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php while ($row = $result->fetch_assoc()): ?>
+                    <tr>
+                        <td>
+                            <?php echo htmlspecialchars($row['vault_name']); ?>
+                        </td>
+                        <td>
+                            <a href="vault_details.php?vault_id=<?php echo $row['vault_id']; ?>"
+                                class="btn btn-primary btn-sm" role="button" aria-disabled="true">View Vault</a>
 
-                        if ($searchError !== ''): ?>
-                            <div class="alert alert-danger" role="alert"><?php echo $searchError; ?></div>
-                        <?php else: ?>
-                        <table class="table table-bordered" id="vaultTable">
-                    <thead>
-                        <tr>
-                            <th>Vault Name</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                    <tbody>
+                            <?php
+                                $canManageVault = (isset($_SESSION['isSiteAdministrator']) && $_SESSION['isSiteAdministrator'] == true) || (isset($row['role']) && $row['role'] === 'Owner');
+                            ?>
 
-                        <?php while ($row = $result->fetch_assoc()): ?>
-                            <tr>
-                                <td>
-                                    <?php echo $row['vault_name']; ?>
-                                </td>
-                                <td>
-                                    <a href="vault_details.php?vault_id=<?php echo $row['vault_id']; ?>"
-                                        class="btn btn-primary btn-sm" role="button" aria-disabled="true">View Vault</a>
+                            <?php if ($canManageVault): ?>
+                                <!-- Edit button to open a modal for editing a vault -->
+                                <button class="btn btn-warning btn-sm edit-btn" data-toggle="modal"
+                                    data-target="#editVaultModal" data-vault-name="<?php echo htmlspecialchars($row['vault_name']); ?>"
+                                    data-vault-id="<?php echo $row['vault_id']; ?>">Edit</button>
 
-                                    <?php
-                                        $canManageVault = (isset($_SESSION['isSiteAdministrator']) && $_SESSION['isSiteAdministrator'] == true) || (isset($row['role']) && $row['role'] === 'Owner');
-                                    ?>
-
-                                    <?php if ($canManageVault): ?>
-                                        <!-- Edit button to open a modal for editing a vault -->
-                                        <button class="btn btn-warning btn-sm edit-btn" data-toggle="modal"
-                                            data-target="#editVaultModal" data-vault-name="<?php echo $row['vault_name']; ?>"
-                                            data-vault-id="<?php echo $row['vault_id']; ?>">Edit</button>
-
-                                        <!-- Delete button to open a modal for deleting a vault -->
-                                        <button class="btn btn-danger btn-sm delete-btn" data-toggle="modal"
-                                            data-target="#deleteVaultModal" data-vault-name="<?php echo $row['vault_name']; ?>"
-                                            data-vault-id="<?php echo $row['vault_id']; ?>">Delete</button>
-                                    <?php endif; ?>
-                                </td>
-                            </tr>
-                        <?php endwhile; ?>
-                    </tbody>
-                </table>
-                    <?php endif; // end searchError check ?>
+                                <!-- Delete button to open a modal for deleting a vault -->
+                                <button class="btn btn-danger btn-sm delete-btn" data-toggle="modal"
+                                    data-target="#deleteVaultModal" data-vault-name="<?php echo htmlspecialchars($row['vault_name']); ?>"
+                                    data-vault-id="<?php echo $row['vault_id']; ?>">Delete</button>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+                <?php endwhile; ?>
+            </tbody>
+        </table>
+        <?php endif; // end searchError check ?>
     </div>
 
     <!-- Modal for adding a new vault -->
@@ -233,6 +247,7 @@ if ($searchTerm !== '' && $result->num_rows === 0) {
                 <div class="modal-body">
                     <!-- Add form for adding a new vault here -->
                     <form method="POST" id="addVaultForm">
+                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(getCsrfToken(), ENT_QUOTES, 'UTF-8'); ?>">
                         <div class="form-group">
                             <label for="vaultName">Vault Name:</label>
                             <input type="text" class="form-control" id="vaultName" name="vaultName" required>
@@ -260,6 +275,7 @@ if ($searchTerm !== '' && $result->num_rows === 0) {
                 <div class="modal-body">
                     <!-- Add form for editing a vault here -->
                     <form method="POST" id="editVaultForm">
+                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(getCsrfToken(), ENT_QUOTES, 'UTF-8'); ?>">
                         <div class="form-group">
                             <input type="hidden" id="editVaultId" name="editVaultId">
                             <label for="editVaultName">Vault Name:</label>
@@ -289,6 +305,7 @@ if ($searchTerm !== '' && $result->num_rows === 0) {
                     <p id="deleteWarningPara"></p>
                     <!-- Add hidden input for vault ID -->
                     <form method="POST" id="deleteVaultForm">
+                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(getCsrfToken(), ENT_QUOTES, 'UTF-8'); ?>">
                         <input type="hidden" id="deleteVaultId" name="deleteVaultId">
                         <button type="submit" class="btn btn-danger" id="confirmDeleteBtn">Delete</button>
                     </form>
@@ -299,67 +316,12 @@ if ($searchTerm !== '' && $result->num_rows === 0) {
     </div>
 
     <!-- Add Bootstrap JS and Popper.js scripts here -->
-    <script src="https://code.jquery.com/jquery-3.3.1.slim.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.7/umd/popper.min.js"></script>
-    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.slim.min.js" integrity="sha384-5AkRS45j4ukf+JbWAfHL8P4onPA9p0KwwP7pUdjSQA3ss9edbJUJc/XcYAiheSSz" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.16.1/umd/popper.min.js" integrity="sha384-9/reFTGAW83EW2RDu2S0VKaIzap3H66lZH81PoYlFhbGU+6BZp6G7niu735Sk7lN" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/js/bootstrap.min.js" integrity="sha384-+sLIOodYLS7CIrQpBjl+C7nPvqq+FbNUBDunl/OZv93DB7Ln/533i8e/mZXLi/P+" crossorigin="anonymous"></script>
+    <script src="/js/site.js"></script>
     <!-- Add your custom JavaScript script for handling modals, filtering, and row click redirection -->
-    <script>
-
-
-        function searchTable(event) {
-
-            if (event.keyCode === 13) {
-                var searchInput = document.getElementById("searchInput").value;
-                window.location.href = "./index.php?searchQuery=" + searchInput;
-            }
-
-
-            // filter = input.value.toUpperCase();
-            // table = document.getElementById("vaultTable");
-            // tr = table.getElementsByTagName("tr");
-
-            // for (i = 0; i < tr.length; i++) {
-            //     td = tr[i].getElementsByTagName("td")[0]; // Change index based on the column you want to search
-            //     if (td) {
-            //         txtValue = td.textContent || td.innerText;
-            //         if (txtValue.toUpperCase().indexOf(filter) > -1) {
-            //             tr[i].style.display = "";
-            //         } else {
-            //             tr[i].style.display = "none";
-            //         }
-            //     }
-            // }        
-        }
-
-
-        // Handle edit button click
-        var editButtons = document.querySelectorAll('.edit-btn');
-        editButtons.forEach(function (button) {
-            button.addEventListener('click', function () {
-                var vaultId = button.getAttribute('data-vault-id');
-                var vaultName = button.getAttribute('data-vault-name');
-                // You can use vaultId to populate the edit modal, if needed
-                document.getElementById('editVaultId').value = vaultId;
-                document.getElementById('editVaultName').value = vaultName;
-            });
-        });
-
-        // Handle delete button click
-        var deleteButtons = document.querySelectorAll('.delete-btn');
-        deleteButtons.forEach(function (button) {
-            button.addEventListener('click', function () {
-                var vaultId = button.getAttribute('data-vault-id');
-                var vaultName = button.getAttribute('data-vault-name');
-                // You can use vaultId to populate the delete modal, if needed
-
-                document.getElementById('deleteVaultId').value = vaultId;
-                document.getElementById('deleteWarningPara').innerText = 'Are you sure you want to delete the ' + vaultName + ' vault?';
-            });
-        });
-
-
-    </script>
-</body>
+    </body>
 
 </html>
 

@@ -1,0 +1,15 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "PHP: Listen for Xdebug (Docker)",
+            "type": "php",
+            "request": "launch",
+            "port": 9003,
+            "pathMappings": {
+                "/var/www/html": "/mnt/c/Users/nitem/Projects/sum-24-uw-cybersec-huskey-manager"
+            },
+            "log": true
+        }
+    ]
+}

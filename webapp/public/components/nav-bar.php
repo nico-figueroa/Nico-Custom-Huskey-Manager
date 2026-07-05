@@ -1,15 +1,4 @@
 <!-- Navigation Bar -->
-<style>
-    .navbar-custom {
-        background-color: #062caa !important;
-    }
-
-    .huskey-logo {
-        width: 50px;
-        height: 50px;
-        margin-right: 10px;
-    }
-</style>
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark navbar-custom">
     <img src="../img/huskey_logo.PNG" class="huskey-logo">
     <a class="navbar-brand navbar-custom" href="#">Educational Password Manager</a>

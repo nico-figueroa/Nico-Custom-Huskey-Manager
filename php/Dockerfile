@@ -27,6 +27,7 @@ COPY ./webapp/composer.* ./
 
 # install
 RUN composer install --prefer-dist --no-dev --no-scripts --no-progress --no-interaction
+RUN printf "expose_php=Off\n" > /usr/local/etc/php/conf.d/security.ini
 
 # copy application files to the working directory
 COPY ./webapp .

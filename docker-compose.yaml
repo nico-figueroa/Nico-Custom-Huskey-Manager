@@ -2,8 +2,10 @@ services:
     # nginx    
     router:
         image: nginx:latest        
+        depends_on:
+            - backend-php-server
         volumes:
-            - ./nginx-default.conf:/etc/nginx/conf.d/default.conf                        
+            - ./nginx-default.conf:/etc/nginx/conf.d/default.conf                       
             - ./webapp/public:/var/www/html/public
             - ./certs/localhost.crt:/etc/nginx/ssl/localhost.crt
             - ./certs/localhost.key:/etc/nginx/ssl/localhost.key
@@ -15,9 +17,13 @@ services:
             dockerfile: ./php/Dockerfile
             target: backend-php-server
         environment:
-            LOGGLY_TOKEN: "${LOGGLY_TOKEN}"
+            LOKI_ENDPOINT: "${LOKI_ENDPOINT}"
+            APP_ENV: "${APP_ENV}"
         extra_hosts:
             - host.docker.internal:host-gateway
+        depends_on:
+            - loki
+            - backend-mysql-database
     # mysql
     backend-mysql-database:
         image: mysql:latest
@@ -34,5 +40,30 @@ services:
  #       ports:
  #           - "3306:3306"
             
+    loki:
+        image: grafana/loki:latest
+        command: -config.file=/etc/loki/local-config.yaml
+        volumes:
+            - ./loki-config.yaml:/etc/loki/local-config.yaml:ro
+            - loki-data:/loki
+        ports:
+            - "3100:3100"
+
+    grafana:
+        image: grafana/grafana:latest
+        depends_on:
+            - loki
+        environment:
+            GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD}"
+            GF_AUTH_ANONYMOUS_ENABLED: "true"
+            GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s:%(http_port)s"
+        volumes:
+            - grafana-data:/var/lib/grafana
+            - ./grafana/provisioning:/etc/grafana/provisioning:ro
+        ports:
+            - "3000:3000"
+
 volumes:
     mysqldata:
+    loki-data:
+    grafana-data:

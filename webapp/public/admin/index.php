@@ -1,7 +1,10 @@
 <?php
 
 include '../components/authenticate.php';
-include '../components/admin-authorization.php';
+include '../components/authorization.php';
+include '../components/logger.php';
+
+requireSiteAdministrator();
 
 $hostname = 'backend-mysql-database';
 $username = 'user';
@@ -11,18 +14,22 @@ $database = 'password_manager';
 $conn = new mysqli($hostname, $username, $password, $database);
 
 if ($conn->connect_error) {
+    $logger->error("Database connection failed: " . $conn->connect_error);
     die("Connection failed: " . $conn->connect_error);
 }
 
 // Fetch users, roles, and vaults from the database
 $queryUsers = "SELECT * FROM users";
 $resultUsers = $conn->query($queryUsers);
+$logger->warning("Fetched users from database.");
 
 $queryRoles = "SELECT * FROM roles";
 $resultRoles = $conn->query($queryRoles);
+$logger->warning("Fetched roles from database.");
 
 $queryVaults = "SELECT * FROM vaults";
 $resultVaults = $conn->query($queryVaults);
+$logger->warning("Fetched vaults from database.");
 
 // Handle form submissions
 
@@ -38,8 +45,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // For example, you can insert, update, or delete records in the vault_permissions table
             $query = "INSERT INTO vault_permissions (user_id, role_id, vault_id) VALUES ($userId, $roleId, $vaultId)";
             $result = $conn->query($query);
+            $logger->warning("Added permission: user_id=$userId, role_id=$roleId, vault_id=$vaultId");
 
             if (!$result) {
+                $logger->error("Error managing user-role-vault relationship: " . $conn->error);
                 die("Error managing user-role-vault relationship: " . $conn->error);
             }
 
@@ -56,12 +65,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $permissionId = $_POST['permission_id'];
             $vaultId = $_POST['vault_id'];
 
-
             // Perform the necessary database operations to delete the permission
             $queryDelete = "DELETE FROM vault_permissions WHERE permission_id = $permissionId";
             $resultDelete = $conn->query($queryDelete);
+            $logger->warning("Deleted permission: permission_id=$permissionId, vault_id=$vaultId");
 
             if (!$resultDelete) {
+                $logger->error("Error deleting permission: " . $conn->error);
                 die("Error deleting permission: " . $conn->error);
             }
 
@@ -90,14 +100,13 @@ if ($selectedVaultId) {
                          JOIN roles r ON p.role_id = r.role_id
                          WHERE p.vault_id = $selectedVaultId";
     $resultPermissions = $conn->query($queryPermissions);
+    $logger->warning("Fetched permissions for vault_id=$selectedVaultId from database.");
 
     while ($permission = $resultPermissions->fetch_assoc()) {
         $permissions[] = $permission;
     }
 }
 ?>
-
-<?php include '../components/nav-bar.php' ?>
 
 <!DOCTYPE html>
 <html lang="en">
@@ -106,15 +115,17 @@ if ($selectedVaultId) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
     <title>User-Role-Vault Relationship Management</title>
-    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css">
+    <!-- <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/css/bootstrap.min.css" integrity="sha384-xOolHFLEh07PJGoPkLv1IbcEPTNtaed2xpHsD9ESMhqIYd0nLMwNLD69Npy4HI+N" crossorigin="anonymous"> -->
+    <link rel="stylesheet" href="/css/matrix.css">
     <!-- Bootstrap JS and other scripts -->
-    <script src="https://code.jquery.com/jquery-3.3.1.slim.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.11.6/dist/umd/popper.min.js"></script>
-    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js"></script>
-</head>
+    <script src="https://code.jquery.com/jquery-3.7.1.slim.min.js" integrity="sha384-5AkRS45j4ukf+JbWAfHL8P4onPA9p0KwwP7pUdjSQA3ss9edbJUJc/XcYAiheSSz" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.16.1/umd/popper.min.js" integrity="sha384-9/reFTGAW83EW2RDu2S0VKaIzap3H66lZH81PoYlFhbGU+6BZp6G7niu735Sk7lN" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/js/bootstrap.min.js" integrity="sha384-+sLIOodYLS7CIrQpBjl+C7nPvqq+FbNUBDunl/OZv93DB7Ln/533i8e/mZXLi/P+" crossorigin="anonymous"></script>
+    <script src="/js/site.js"></script>
 </head>
 
 <body>
+    <?php include '../components/nav-bar.php' ?>
 
     <div class="container mt-4">
         <h2>User-Role-Vault Relationship Management</h2>
@@ -122,7 +133,7 @@ if ($selectedVaultId) {
         <form method="get" action="<?php echo $_SERVER['PHP_SELF']; ?>">
             <div class="form-group">
                 <label for="vault">Select Vault:</label>
-                <select class="form-control" id="vault" name="vault_id" onchange="this.form.submit()" required>
+                <select class="form-control" id="vault" name="vault_id" required>
                     <option value="" disabled selected>Select a Vault</option>
                     <?php while ($vault = $resultVaults->fetch_assoc()): ?>
                         <option value="<?php echo $vault['vault_id']; ?>" <?php echo ($selectedVaultId == $vault['vault_id']) ? 'selected' : ''; ?>>
@@ -171,7 +182,6 @@ if ($selectedVaultId) {
             <!-- Add Permission button to open a modal for adding a new permission -->
             <button class="btn btn-success" data-toggle="modal" data-target="#addModal">Add Permission</button>
 
-
             <!-- Delete Permission Modal -->
             <div class="modal fade" id="deleteModal" tabindex="-1" role="dialog" aria-labelledby="deleteModalLabel"
                 aria-hidden="true">
@@ -181,23 +191,7 @@ if ($selectedVaultId) {
                     <input type="hidden" name="permission_id" id="deletePermissionId" value="">
                     <input type="hidden" name="action" value="delete">
                 </form>
-                <script>
-                    $(document).ready(function () {
-                        // Attach click event to delete buttons
-                        $('.delete-btn').click(function () {
-                            var permissionId = $(this).data('permission-id');
-                            var vaultId = $(this).data('vault-id');
-
-                            // Set values in the delete form
-                            $('#deletePermissionId').val(permissionId);
-                            $('#deleteVaultId').val(vaultId);
-
-                            // Submit the delete form
-                            $('#deleteForm').submit();
-                        });
-                    });
-                </script>
-            </div>
+                </div>
             <!-- Add Permission Modal -->
             <div class="modal fade" id="addModal" tabindex="-1" role="dialog" aria-labelledby="addModalLabel"
                 aria-hidden="true">

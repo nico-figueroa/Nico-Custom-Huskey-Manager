@@ -30,11 +30,11 @@ This web application runs in Docker. Docker is a platform for developing and dep
     Call this new file `.env`. Within this file, copy and paste the following information:
 
     ```
-    MYSQL_PORT: 3306
-    MYSQL_PASSWORD: supersecretpw
-    MYSQL_DATABASE: password_manager
-    MYSQL_USER: user
-    BUILD_TARGET: backend-php-server
+    MYSQL_PORT=3306
+    MYSQL_PASSWORD=supersecretpw
+    MYSQL_DATABASE=password_manager
+    MYSQL_USER=user
+    BUILD_TARGET=backend-php-server
     ```
 
 3. In your terminal, cd into your HusKey Manager directory. Once inside you can run the following command to deploy your HusKey Manager in Docker:
@@ -43,6 +43,8 @@ This web application runs in Docker. Docker is a platform for developing and dep
     ```
 
     This will pull the docker images from Docker hub and deploy them into containers following the instructions in the `docker-compose.yaml` file.
+
+    Grafana is available at [http://localhost:3000](http://localhost:3000) using the default admin credentials `admin/admin`, and Loki is available on port `3100` for log ingestion.
 
     To shut down your HusKey Manager, just press `ctrl + c` within your terminal.
 
